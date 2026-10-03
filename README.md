@@ -38,4 +38,4 @@ Este projeto reúne scripts criados para otimizar rotinas operacionais de coleta
 
 **Filipe Souza**  
 Estudante de Análise e Desenvolvimento de Sistemas (ADS) @ Unifametro 
-[LinkedIn](https://www.linkedin.com/in/filipe-souza-6154b731b?utm_source=share_via&utm_content=profile&utm_medium=member_android)
+[LinkedIn](https://www.linkedin.com/in/filipe-souza-6154b731b)
