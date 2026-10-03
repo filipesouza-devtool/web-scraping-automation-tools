@@ -6,7 +6,7 @@ Conjunto de utilitários em **JavaScript** desenvolvidos para automação de ext
 
 ### 📌 Sobre o Projeto
 
-Este projeto reúne scripts criados para otimizar rotinas operacionais de coleta e estruturação de dados. O **scraper dinâmico** permite inspecionar, selecionar e extrair qualquer dado de uma página web diretamente pelo console, eliminando processos manuais repetitivos[span_1](start_span)[span_1](end_span).
+Este projeto reúne scripts criados para otimizar rotinas operacionais de coleta e estruturação de dados. O **scraper dinâmico** permite inspecionar, selecionar e extrair qualquer dado de uma página web diretamente pelo console, eliminando processos manuais repetitivos[](start_span)[](end_span).
 
 ---
 
@@ -37,5 +37,5 @@ Este projeto reúne scripts criados para otimizar rotinas operacionais de coleta
 ### 👨‍💻 Autor
 
 **Filipe Souza**  
-Estudante de Análise e Desenvolvimento de Sistemas (ADS) @ Unifametro[span_2](start_span)[span_2](end_span)  
+Estudante de Análise e Desenvolvimento de Sistemas (ADS) @ Unifametro 
 [LinkedIn](https://www.linkedin.com/in/filipe-souza-6154b731b?utm_source=share_via&utm_content=profile&utm_medium=member_android)
