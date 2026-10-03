@@ -437,4 +437,225 @@
         return readNode(resolveNode(card, c), c.mode);
       });
       // Só conta se o próprio card trouxe algo (contexto/fixo sozinhos não criam linha)
-      const ok =
+      const ok = hasOwn ? S.cols.some((c, i) => c.scope === 'card' && vals[i]) : vals.some(Boolean);
+      if (!ok) return;
+
+      const prev = S.byEl.get(card);
+      if (prev && prev.vals.every((v, i) => !v || !vals[i] || v === vals[i])) {
+        vals.forEach((v, i) => { if (!prev.vals[i] && v) prev.vals[i] = v; });
+        return;
+      }
+      const rec = { vals };
+      S.recs.push(rec);
+      S.byEl.set(card, rec);
+    });
+  }
+
+  function scrollParent(el) {
+    for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+      if (/(auto|scroll)/.test(getComputedStyle(p).overflowY) && p.scrollHeight > p.clientHeight + 20) return p;
+    }
+    return document.scrollingElement || document.documentElement;
+  }
+
+  async function crawl() {
+    const sp = S.card && S.card.isConnected ? scrollParent(S.card) : (document.scrollingElement || document.documentElement);
+    const origTop = sp.scrollTop;
+    sp.scrollTo({ top: 0, behavior: 'instant' });
+    await delay(OPTS.wait);
+
+    let still = 0, lastH = -1, steps = 0;
+    const t0 = Date.now();
+    while (!S.abort && steps < OPTS.maxSteps && Date.now() - t0 < OPTS.maxMs) {
+      steps++;
+      harvest();
+      setStatus(`Varrendo… ${S.recs.length} registros`);
+      const atBottom = sp.scrollTop + sp.clientHeight >= sp.scrollHeight - 4;
+      if (atBottom) {
+        still = sp.scrollHeight === lastH ? still + 1 : 0;
+        if (still >= 3) break; // 3 rodadas no fim sem crescer = acabou
+      } else still = 0;
+      lastH = sp.scrollHeight;
+      sp.scrollBy({ top: Math.max(200, sp.clientHeight * 0.8), behavior: 'instant' });
+      await delay(OPTS.wait);
+    }
+    harvest();
+    sp.scrollTo({ top: origTop, behavior: 'instant' });
+    return steps;
+  }
+
+  async function run() {
+    if (S.running) { S.abort = true; return; }
+    if (!getCards().length) return setStatus('⚠️ Nenhum card encontrado. A página mudou? Use "Limpar" e mapeie de novo.');
+    OPTS.wait = Math.min(5000, Math.max(100, +waitIn.value || 400));
+    S.abort = false; S.recs = []; S.byEl = new Map();
+    S.cols.forEach((c) => { c.last = ''; });
+    setRunning(true);
+    const t0 = Date.now();
+    let steps = 0;
+    try { steps = await crawl(); } catch (err) { console.error('[Scraper]', err); setStatus('❌ Erro: ' + err.message); }
+
+    const total = S.recs.length;
+    let rows = S.recs.map((r) => r.vals);
+    if (dedupeIn.checked) {
+      const seen = new Set();
+      rows = rows.filter((v) => { const k = v.join('\u0001'); if (seen.has(k)) return false; seen.add(k); return true; });
+    }
+    S.headers = S.cols.map((c) => c.name);
+    S.rows = rows;
+    S.byEl.clear(); // libera referências ao DOM
+    window.__uniData = toObjects();
+
+    // Telemetria: quanto cada coluna ficou vazia (ajuda a achar mapeamento ruim)
+    const empty = Object.fromEntries(S.cols.map((c, i) => [
+      `${c.name} (${c.scope})`,
+      rows.length ? Math.round(100 * rows.filter((r) => !r[i]).length / rows.length) + '% vazio' : '-'
+    ]));
+    console.info('[Scraper]', { registros: rows.length, duplicados: total - rows.length, passos: steps, ms: Date.now() - t0, interrompido: S.abort });
+    console.table(empty);
+
+    setRunning(false);
+    const dup = total - rows.length;
+    setStatus(`${S.abort ? '⏹ Interrompido' : '✅ Concluído'}: ${rows.length} registros` + (dup ? ` (${dup} duplicados removidos)` : ''));
+    viewBtn.hidden = !rows.length;
+    if (rows.length) openResults();
+  }
+
+  const toObjects = () => S.rows.map((r) => Object.fromEntries(S.headers.map((hd, i) => [hd, r[i]])));
+
+  // ───────────────────────── Resultados ─────────────────────────
+  let modal = null;
+  function closeResults() { if (modal) { modal.remove(); modal = null; } }
+
+  function openResults() {
+    closeResults();
+    const tbody = h('tbody');
+    const count = h('b');
+
+    const paint = () => {
+      count.textContent = `📦 ${S.rows.length} registros`;
+      viewBtn.textContent = `📋 Ver resultados (${S.rows.length})`;
+      const frag = document.createDocumentFragment();
+      S.rows.forEach((row, r) => frag.append(h('tr', {},
+        h('td', { class: 'act' }, h('button', { class: 'x', text: '✕', title: 'Remover linha', 'data-r': r })),
+        ...row.map((v, c) => h('td', { contenteditable: 'true', 'data-r': r, 'data-c': c, text: v })))));
+      tbody.replaceChildren(frag);
+    };
+
+    tbody.addEventListener('input', (e) => {
+      const td = e.target.closest && e.target.closest('td[data-c]');
+      if (td) S.rows[+td.dataset.r][+td.dataset.c] = td.textContent.trim();
+    });
+    tbody.addEventListener('click', (e) => {
+      const b = e.target.closest && e.target.closest('button[data-r]');
+      if (b) { S.rows.splice(+b.dataset.r, 1); window.__uniData = toObjects(); paint(); }
+    });
+
+    modal = h('div', { class: 'modal' },
+      h('div', { class: 'mh' }, count,
+        h('div', { class: 'row' },
+          btn('Copiar (Excel)', 'blue', copyTSV),
+          btn('CSV', 'green', exportCSV),
+          btn('XLSX', 'green', exportXLSX),
+          btn('JSON', 'blue', exportJSON),
+          btn('Minimizar', 'ghost', closeResults))),
+      h('div', { class: 'mb' },
+        h('table', {}, h('thead', {}, h('tr', {}, h('th', { text: '' }), ...S.headers.map((x) => h('th', { text: x })))), tbody)));
+    root.append(modal);
+    paint();
+  }
+
+  // ───────────────────────── Exportação ─────────────────────────
+  const stamp = () => new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+
+  function download(blob, name) {
+    const a = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    a.href = url; a.download = name;
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500); // revogar na hora pode cancelar o download
+  }
+
+  async function copyTSV() {
+    const cell = (v) => String(v ?? '').replace(/[\t\r\n]+/g, ' ');
+    const text = [S.headers, ...S.rows].map((r) => r.map(cell).join('\t')).join('\n');
+    try { await navigator.clipboard.writeText(text); }
+    catch (_) {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.cssText = 'position:fixed;opacity:0';
+      document.body.append(ta); ta.select(); document.execCommand('copy'); ta.remove();
+    }
+    setStatus('📋 Copiado! Cole direto no Excel.');
+  }
+
+  function exportJSON() {
+    download(new Blob([JSON.stringify(toObjects(), null, 2)], { type: 'application/json' }), `extracao_${stamp()}.json`);
+  }
+
+  function exportCSV() {
+    // Neutraliza células que o Excel interpretaria como fórmula
+    const q = (v) => {
+      let s = String(v ?? '');
+      if (/^[=@\t\r]|^[+\-](?!\d)/.test(s)) s = "'" + s;
+      return '"' + s.replace(/"/g, '""') + '"';
+    };
+    const csv = [S.headers, ...S.rows].map((r) => r.map(q).join(';')).join('\r\n');
+    download(new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' }), `extracao_${stamp()}.csv`);
+  }
+
+  // XLSX real (ZIP sem compressão + OOXML mínimo), sem bibliotecas
+  const CRC = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+    return t;
+  })();
+  const crc32 = (u8) => { let c = 0xFFFFFFFF; for (let i = 0; i < u8.length; i++) c = CRC[(c ^ u8[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+
+  function zip(files) {
+    const enc = new TextEncoder();
+    const le = (...f) => { const b = []; for (const [n, sz] of f) for (let i = 0; i < sz; i++) b.push((n >>> (8 * i)) & 255); return new Uint8Array(b); };
+    const parts = [], cd = [];
+    let off = 0, cdSize = 0;
+    for (const f of files) {
+      const name = enc.encode(f.name), size = f.data.length, crc = crc32(f.data);
+      const local = le([0x04034b50, 4], [20, 2], [0x0800, 2], [0, 2], [0, 2], [0x21, 2], [crc, 4], [size, 4], [size, 4], [name.length, 2], [0, 2]);
+      const cen = le([0x02014b50, 4], [20, 2], [20, 2], [0x0800, 2], [0, 2], [0, 2], [0x21, 2], [crc, 4], [size, 4], [size, 4], [name.length, 2], [0, 2], [0, 2], [0, 2], [0, 2], [0, 4], [off, 4]);
+      parts.push(local, name, f.data);
+      cd.push(cen, name);
+      off += local.length + name.length + size;
+      cdSize += cen.length + name.length;
+    }
+    const end = le([0x06054b50, 4], [0, 2], [0, 2], [files.length, 2], [files.length, 2], [cdSize, 4], [off, 4], [0, 2]);
+    return new Blob([...parts, ...cd, end], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  }
+
+  function exportXLSX() {
+    const enc = new TextEncoder();
+    const bad = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g;
+    const X = (s) => String(s ?? '').replace(bad, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const L = (i) => { let s = ''; for (i++; i > 0; i = Math.floor((i - 1) / 26)) s = String.fromCharCode(65 + ((i - 1) % 26)) + s; return s; };
+    const hdr = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+    const rowsXml = [S.headers, ...S.rows].map((row, r) =>
+      `<row r="${r + 1}">${row.map((v, c) => `<c r="${L(c)}${r + 1}" t="inlineStr"><is><t xml:space="preserve">${X(v)}</t></is></c>`).join('')}</row>`).join('');
+    const files = [
+      ['[Content_Types].xml', `${hdr}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`],
+      ['_rels/.rels', `${hdr}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`],
+      ['xl/workbook.xml', `${hdr}<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Dados" sheetId="1" r:id="rId1"/></sheets></workbook>`],
+      ['xl/_rels/workbook.xml.rels', `${hdr}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`],
+      ['xl/worksheets/sheet1.xml', `${hdr}<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rowsXml}</sheetData></worksheet>`]
+    ].map(([name, xml]) => ({ name, data: enc.encode(xml) }));
+    download(zip(files), `extracao_${stamp()}.xlsx`);
+  }
+
+  // ───────────────────────── Encerramento ─────────────────────────
+  function destroy() {
+    S.abort = true;
+    stopInspect();
+    closeResults();
+    host.remove();
+    delete window.__uniDestroy;
+  }
+  window.__uniDestroy = destroy;
+
+  renderCols();
+})();
